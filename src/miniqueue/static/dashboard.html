@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>miniqueue</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #14171c; --muted: #6a7280; --line: #e3e6eb;
+    --pending: #b7791f; --running: #2b6cb0; --success: #2f855a; --failed: #c53030;
+    --accent: #3b5bdb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --card: #171b21; --ink: #e8ebf0; --muted: #8b94a3; --line: #262c35;
+      --pending: #ecc94b; --running: #63b3ed; --success: #68d391; --failed: #fc8181;
+      --accent: #748ffc;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+       margin: 0 0 12px; font-weight: 600; }
+  #live { color: var(--muted); font-size: 12px; }
+  #live::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                  background: var(--failed); margin-right: 6px; }
+  #live.on::before { background: var(--success); }
+  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .stat .n { font-size: 28px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stat .l { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .stat.pending .n { color: var(--pending); } .stat.running .n { color: var(--running); }
+  .stat.success .n { color: var(--success); } .stat.failed .n { color: var(--failed); }
+  form { display: grid; grid-template-columns: 1.2fr 2fr 2fr .7fr .7fr auto; gap: 8px; align-items: end; }
+  label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  input, select, button { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line);
+                          border-radius: 7px; padding: 7px 9px; width: 100%; }
+  button { cursor: pointer; width: auto; background: var(--accent); border-color: var(--accent);
+           color: #fff; font-weight: 600; padding: 8px 16px; }
+  button.ghost { background: transparent; color: var(--accent); }
+  button:hover { filter: brightness(1.08); }
+  .actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #msg { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+  td.num { font-variant-numeric: tabular-nums; }
+  code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600;
+           border: 1px solid currentColor; }
+  .badge.pending { color: var(--pending); } .badge.running { color: var(--running); }
+  .badge.success { color: var(--success); } .badge.failed { color: var(--failed); }
+  .out { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .err { color: var(--failed); }
+  .empty { color: var(--muted); padding: 24px; text-align: center; }
+  .scroll { overflow-x: auto; }
+  @media (max-width: 800px) {
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    form { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>miniqueue</h1>
+    <span id="live">connecting…</span>
+  </header>
+
+  <section class="cards" id="stats"></section>
+
+  <section class="card" style="margin-bottom:16px">
+    <h2>Enqueue</h2>
+    <form id="form">
+      <div><label for="task">Task</label><select id="task"></select></div>
+      <div><label for="args">Args (JSON list)</label><input id="args" value="[]" spellcheck="false"></div>
+      <div><label for="kwargs">Kwargs (JSON object)</label><input id="kwargs" value="{}" spellcheck="false"></div>
+      <div><label for="count">Count</label><input id="count" type="number" min="1" max="200" value="1"></div>
+      <div><label for="delay">Delay (s)</label><input id="delay" type="number" min="0" step="0.5" value="0"></div>
+      <button type="submit">Enqueue</button>
+    </form>
+    <div class="actions">
+      <button type="button" class="ghost" id="burst">Send demo burst</button>
+      <span id="msg"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Recent jobs</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>ID</th><th>Task</th><th>Status</th><th>Try</th><th>Worker</th><th>Time</th><th>Result / error</th>
+        </tr></thead>
+        <tbody id="jobs"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Example arguments offered when you pick a task
+const EXAMPLES = {
+  add: ["[2, 3]", "{}"], word_count: ['["the quick brown fox jumps over the lazy dog the end"]', "{}"],
+  fib: ["[30]", "{}"], slow_square: ["[7]", '{"seconds": 4}'], flaky: ["[]", '{"fail_rate": 0.6}'],
+  send_email: ['["ada@example.com"]', '{"subject": "Hi"}'], hang: ["[]", "{}"],
+};
+
+function renderStats(s) {
+  const items = [["pending", "Pending"], ["running", "Running"], ["success", "Success"],
+                 ["failed", "Failed"], ["total", "Total"]];
+  $("#stats").innerHTML = items.map(([k, label]) =>
+    `<div class="card stat ${k}"><div class="n">${s[k] ?? 0}</div><div class="l">${label}</div></div>`).join("");
+}
+
+function duration(j) {
+  if (!j.started_at) return "";
+  const end = j.finished_at ?? Date.now() / 1000;
+  return Math.max(0, end - j.started_at).toFixed(1) + "s";
+}
+
+function renderJobs(jobs) {
+  if (!jobs.length) {
+    $("#jobs").innerHTML = '<tr><td colspan="7" class="empty">No jobs yet. Enqueue one above.</td></tr>';
+    return;
+  }
+  $("#jobs").innerHTML = jobs.map((j) => {
+    let out = "";
+    if (j.error) out = `<span class="err">${esc(j.error)}</span>`;
+    else if (j.result !== null && j.result !== undefined) out = esc(JSON.stringify(j.result));
+    const retrying = j.status === "pending" && j.attempts > 0 ? " (retrying)" : "";
+    return `<tr>
+      <td><code>${esc(j.id.slice(0, 8))}</code></td>
+      <td>${esc(j.task_name)}</td>
+      <td><span class="badge ${j.status}">${j.status}${retrying}</span></td>
+      <td class="num">${j.attempts}/${j.max_retries + 1}</td>
+      <td><code>${esc(j.worker ?? "")}</code></td>
+      <td class="num">${duration(j)}</td>
+      <td class="out" title="${esc(out.replace(/<[^>]+>/g, ""))}">${out}</td></tr>`;
+  }).join("");
+}
+
+function connect() {
+  const es = new EventSource("/api/stream");
+  es.onopen = () => { $("#live").textContent = "live"; $("#live").className = "on"; };
+  es.onmessage = (e) => { const d = JSON.parse(e.data); renderStats(d.stats); renderJobs(d.jobs); };
+  es.onerror = () => { $("#live").textContent = "reconnecting…"; $("#live").className = ""; };
+}
+
+async function post(body) {
+  const r = await fetch("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" },
+                                       body: JSON.stringify(body) });
+  if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+  return r.json();
+}
+
+function say(text, bad) { const m = $("#msg"); m.textContent = text; m.className = bad ? "err" : ""; }
+
+$("#form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const jobs = await post({
+      task: $("#task").value, args: JSON.parse($("#args").value || "[]"),
+      kwargs: JSON.parse($("#kwargs").value || "{}"),
+      count: +$("#count").value, delay: +$("#delay").value,
+    });
+    say(`Enqueued ${jobs.length} job(s).`);
+  } catch (err) { say(err.message, true); }
+});
+
+$("#burst").addEventListener("click", async () => {
+  try {
+    await Promise.all([
+      post({ task: "add", args: [1, 2], count: 8 }),
+      post({ task: "fib", args: [30], count: 4 }),
+      post({ task: "flaky", count: 3 }),
+      post({ task: "send_email", args: ["ada@example.com"], count: 2 }),
+      post({ task: "hang" }),
+    ]);
+    say("Demo burst sent: 18 jobs (one will time out, three are flaky).");
+  } catch (err) { say(err.message, true); }
+});
+
+$("#task").addEventListener("change", () => {
+  const ex = EXAMPLES[$("#task").value] ?? ["[]", "{}"];
+  $("#args").value = ex[0]; $("#kwargs").value = ex[1];
+});
+
+(async () => {
+  const tasks = await (await fetch("/api/tasks")).json();
+  $("#task").innerHTML = tasks.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+  $("#task").dispatchEvent(new Event("change"));
+  connect();
+})();
+</script>
+</body>
+</html>
